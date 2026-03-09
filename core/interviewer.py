@@ -303,8 +303,89 @@ def _claude_conversation(messages: list, api_key: str, system: str, max_tokens: 
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=120) as resp:
+    with urllib.request.urlopen(req, timeout=180) as resp:
         return json.loads(resp.read())["content"][0]["text"].strip()
+
+
+# ---------------------------------------------------------------------------
+# Context management — rolling compression + dedicated JSON generation
+# ---------------------------------------------------------------------------
+
+# Threshold in chars (~6k tokens) before compressing older turns
+_COMPRESS_THRESHOLD = 24000
+# Number of recent message turns to keep uncompressed after a compression pass
+_KEEP_RECENT = 8
+
+
+def _estimate_chars(messages: list) -> int:
+    return sum(len(m.get("content", "")) for m in messages)
+
+
+def _compress_history(messages: list, api_key: str) -> list:
+    """
+    Compress older conversation turns into a dense summary to free context space.
+    Keeps the last _KEEP_RECENT messages intact; summarizes everything before.
+    Called when _estimate_chars(messages) > _COMPRESS_THRESHOLD.
+    """
+    if len(messages) <= _KEEP_RECENT:
+        return messages
+
+    old = messages[:-_KEEP_RECENT]
+    recent = messages[-_KEEP_RECENT:]
+
+    old_formatted = "\n\n".join(
+        f"{m['role'].upper()}: {m['content']}"
+        for m in old
+    )
+
+    try:
+        summary = _claude(
+            f"""This is part of a user onboarding interview. Summarize ALL specific facts captured so far. Be extremely dense and specific — include every name, tool, domain term, direct quote, voice pattern example, location detail, and personal fact mentioned. Nothing generic.
+
+Cover: identity/role/location/company, domain expertise + hot takes, voice patterns observed from their actual replies (sentence structure, openers, humor, formality, what they avoid), personal interests (specific), emotional register per topic, Twitter strategy details mentioned so far.
+
+CONVERSATION:
+{old_formatted}
+
+Output a dense factual summary only. Every specific detail matters.""",
+            api_key,
+            max_tokens=2500,
+        )
+        return [
+            {"role": "user", "content": f"[INTERVIEW HISTORY — summarized to save context]\n{summary}"},
+            {"role": "assistant", "content": "Got it. I have all that context. Continuing from where we are."},
+        ] + list(recent)
+    except Exception:
+        # Compression failed — fall back to truncating aggressively
+        return messages[-(_KEEP_RECENT * 2):]
+
+
+def _generate_completion_json(messages: list, api_key: str) -> str:
+    """
+    Dedicated high-budget API call to generate the final completion JSON.
+    Called after [INTERVIEW_COMPLETE] is detected, using the conversation history
+    (without the potentially-truncated completion response) as context.
+    Uses max_tokens=8000 to ensure the full JSON is never cut off.
+    """
+    # Cap input to last 30 messages to stay within input token limits
+    context = messages[-30:] if len(messages) > 30 else list(messages)
+
+    context.append({
+        "role": "user",
+        "content": (
+            "The interview is complete and I've confirmed the summary. "
+            "Now output the [INTERVIEW_COMPLETE] signal followed by the complete JSON profile. "
+            "Fill every field with the rich specific content from our full conversation. "
+            "Output ONLY [INTERVIEW_COMPLETE] followed by the JSON — no text before, no text after the closing brace."
+        ),
+    })
+
+    return _claude_conversation(
+        messages=context,
+        api_key=api_key,
+        system=INTERVIEWER_SYSTEM_PROMPT,
+        max_tokens=8000,
+    )
 
 
 def _ask(prompt: str, default: str = "") -> str:
@@ -587,6 +668,14 @@ def run_claude_interview(api_key: str, handle: str) -> dict:
     """
     Run the full Claude-powered conversational interview.
     Returns the parsed data dict from the completion JSON.
+
+    Context management:
+    - Rolling compression: when conversation history exceeds ~24k chars (~6k tokens),
+      older turns are compressed into a dense summary via a separate Claude call.
+      This keeps the input token count manageable throughout the 20-min interview.
+    - Dedicated JSON generation: after [INTERVIEW_COMPLETE] is detected, a separate
+      API call with max_tokens=8000 generates the full JSON. This ensures the JSON
+      is never truncated regardless of how long the interview ran.
     """
     messages = []
 
@@ -596,7 +685,7 @@ def run_claude_interview(api_key: str, handle: str) -> dict:
 
     print(f"\n  You: {opening}\n")
 
-    # Get Claude's first response (no spinner on first turn — instant start)
+    # Get Claude's first response
     _start_spinner("  Claude is thinking")
     try:
         response = _claude_conversation(
@@ -614,11 +703,6 @@ def run_claude_interview(api_key: str, handle: str) -> dict:
     while True:
         # Check for completion marker
         if "[INTERVIEW_COMPLETE]" in response:
-            # Show text before the marker (Claude's closing message)
-            closing_text = response.split("[INTERVIEW_COMPLETE]")[0].strip()
-            if closing_text:
-                print(f"\n{closing_text}\n")
-            print("\n  Interview complete. Parsing your profile...\n")
             break
 
         # Display Claude's response
@@ -630,10 +714,17 @@ def run_claude_interview(api_key: str, handle: str) -> dict:
         if not user_input:
             continue
 
-        # Add user message to history
         messages.append({"role": "user", "content": user_input})
 
-        # Get next Claude response with spinner
+        # Compress history if getting too long (keeps token budget manageable)
+        if _estimate_chars(messages) > _COMPRESS_THRESHOLD:
+            _start_spinner("  Compressing context")
+            try:
+                messages = _compress_history(messages, api_key)
+            finally:
+                _stop_spinner()
+
+        # Get next Claude response
         _start_spinner("  Claude is thinking")
         try:
             response = _claude_conversation(
@@ -647,9 +738,25 @@ def run_claude_interview(api_key: str, handle: str) -> dict:
 
         messages.append({"role": "assistant", "content": response})
 
-    # Parse and return the structured data
-    data = _extract_data(response, handle)
-    return data
+    # Show Claude's closing message (text before the completion marker)
+    closing_text = response.split("[INTERVIEW_COMPLETE]")[0].strip()
+    if closing_text:
+        print(f"\n{closing_text}\n")
+
+    # Dedicated JSON generation — separate call with 8k token budget
+    # This guarantees the JSON is never truncated, regardless of interview length.
+    print("\n  Generating your complete profile...")
+    _start_spinner("  Building profile")
+    try:
+        # Pass history without the last assistant message (which may be incomplete)
+        # and let Claude regenerate the JSON cleanly with full token budget.
+        history_for_json = messages[:-1]
+        json_response = _generate_completion_json(history_for_json, api_key)
+    finally:
+        _stop_spinner()
+
+    print("\n  Interview complete. Parsing your profile...\n")
+    return _extract_data(json_response, handle)
 
 
 # ---------------------------------------------------------------------------
