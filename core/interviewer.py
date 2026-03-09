@@ -311,10 +311,13 @@ def _claude_conversation(messages: list, api_key: str, system: str, max_tokens: 
 # Context management — rolling compression + dedicated JSON generation
 # ---------------------------------------------------------------------------
 
-# Threshold in chars (~6k tokens) before compressing older turns
-_COMPRESS_THRESHOLD = 24000
-# Number of recent message turns to keep uncompressed after a compression pass
-_KEEP_RECENT = 8
+# Compress only when history genuinely threatens input limits.
+# Claude Opus 4.6 has a 200k token context window (~800k chars).
+# A full 20-min interview rarely exceeds 30k-50k chars total conversation.
+# We compress at ~320k chars (~80k tokens) — leaving 120k+ tokens of headroom.
+_COMPRESS_THRESHOLD = 320_000
+# Keep last 12 turns intact after a compression pass — preserves immediate context
+_KEEP_RECENT = 12
 
 
 def _estimate_chars(messages: list) -> int:
@@ -325,7 +328,8 @@ def _compress_history(messages: list, api_key: str) -> list:
     """
     Compress older conversation turns into a dense summary to free context space.
     Keeps the last _KEEP_RECENT messages intact; summarizes everything before.
-    Called when _estimate_chars(messages) > _COMPRESS_THRESHOLD.
+    Called when _estimate_chars(messages) > _COMPRESS_THRESHOLD (very long interviews).
+    Compression summary gets 4000 tokens — enough to capture everything specific.
     """
     if len(messages) <= _KEEP_RECENT:
         return messages
@@ -349,26 +353,31 @@ CONVERSATION:
 
 Output a dense factual summary only. Every specific detail matters.""",
             api_key,
-            max_tokens=2500,
+            max_tokens=4000,
         )
         return [
             {"role": "user", "content": f"[INTERVIEW HISTORY — summarized to save context]\n{summary}"},
             {"role": "assistant", "content": "Got it. I have all that context. Continuing from where we are."},
         ] + list(recent)
     except Exception:
-        # Compression failed — fall back to truncating aggressively
+        # Compression failed — truncate, keeping the most recent context
         return messages[-(_KEEP_RECENT * 2):]
 
 
 def _generate_completion_json(messages: list, api_key: str) -> str:
     """
     Dedicated high-budget API call to generate the final completion JSON.
-    Called after [INTERVIEW_COMPLETE] is detected, using the conversation history
+    Called after [INTERVIEW_COMPLETE] is detected, using the full conversation history
     (without the potentially-truncated completion response) as context.
-    Uses max_tokens=8000 to ensure the full JSON is never cut off.
+
+    Token budget:
+    - Input: full messages list (no count cap — after compression if triggered,
+      everything fits comfortably within the 200k context window)
+    - Output: max_tokens=16000 — the rich JSON with 6 soul_map dimensions × 3-4
+      paragraphs + 7 keyword banks × 20 terms + all other fields runs ~10k-14k chars
+      (~2.5k-3.5k tokens). 16k gives a massive safety margin.
     """
-    # Cap input to last 30 messages to stay within input token limits
-    context = messages[-30:] if len(messages) > 30 else list(messages)
+    context = list(messages)
 
     context.append({
         "role": "user",
@@ -384,7 +393,7 @@ def _generate_completion_json(messages: list, api_key: str) -> str:
         messages=context,
         api_key=api_key,
         system=INTERVIEWER_SYSTEM_PROMPT,
-        max_tokens=8000,
+        max_tokens=16000,
     )
 
 
