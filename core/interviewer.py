@@ -530,6 +530,9 @@ def phase_0b_twitter_login(handle: str) -> bool:
 
     try:
         return asyncio.run(_open_twitter_browser(profile_dir))
+    except KeyboardInterrupt:
+        print("\n  Browser login skipped. You can log in when running your first session.")
+        return False
     except Exception as e:
         print(f"  Browser setup failed ({e}). You can log in when running your first session.")
         return False
