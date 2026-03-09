@@ -31,7 +31,13 @@ import urllib.request
 # Claude helper
 # ---------------------------------------------------------------------------
 
-def _claude(prompt: str, api_key: str, system: str = "", max_tokens: int = 1500) -> str:
+def _claude(prompt: str, api_key: str, system: str = "", max_tokens: int = 1500,
+            return_stop_reason: bool = False):
+    """
+    Single-turn Claude call.
+    If return_stop_reason=True, returns (text, stop_reason) so callers can
+    detect truncation (stop_reason == "max_tokens") and abort the write.
+    """
     payload = {
         "model": "claude-opus-4-6",
         "max_tokens": max_tokens,
@@ -49,8 +55,13 @@ def _claude(prompt: str, api_key: str, system: str = "", max_tokens: int = 1500)
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=45) as resp:
-        return json.loads(resp.read())["content"][0]["text"].strip()
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        body = json.loads(resp.read())
+    text = body["content"][0]["text"].strip()
+    stop_reason = body.get("stop_reason", "")
+    if return_stop_reason:
+        return text, stop_reason
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -473,7 +484,13 @@ For EACH content pillar from the data above, write:
 ## Anti-Patterns
 (Specific things to NEVER do based on their cringe definition and stated avoids)
 """
-    return _claude(prompt, api_key, max_tokens=4000)
+    text, stop_reason = _claude(prompt, api_key, max_tokens=4000, return_stop_reason=True)
+    if stop_reason == "max_tokens":
+        raise RuntimeError(
+            "strategy.md generation hit max_tokens — output was truncated. "
+            "The file was NOT written. Re-run with --regen to retry."
+        )
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -497,18 +514,53 @@ with every session and is what makes the system sound more like you over time.
 
 
 # ---------------------------------------------------------------------------
-# interaction_preferences.md — empty template
+# interaction_preferences.md — pre-seeded from interview, grows from sessions
 # ---------------------------------------------------------------------------
 
 def gen_interaction_preferences(data: dict) -> str:
+    """
+    Pre-seed with single-quoted tool/topic names from the interview keyword bank.
+    AI-Knowledge's _build_for_you_filters() extracts single-quoted terms from this
+    file to auto-enrich the For You feed filter. Without pre-seeding, the filter
+    starts empty and only grows after profile-sync sessions.
+    """
     f = data["foundation"]
+    d = data.get("domain", {})
+    keyword_bank = d.get("keyword_bank", {})
+
+    # Collect the most specific/recognizable terms from high-signal categories
+    # Single-quoted format is what _build_for_you_filters() regex extracts
+    seed_terms = []
+    seen = set()
+    for cat in ["primary_domain", "ai_tools", "secondary_domain", "lifestyle_local"]:
+        for kw in keyword_bank.get(cat, [])[:8]:
+            kw_clean = kw.strip().lower()
+            if kw_clean not in seen and len(kw_clean) > 2:
+                seen.add(kw_clean)
+                seed_terms.append(f"'{kw_clean}'")
+
+    seed_block = ""
+    if seed_terms:
+        # Format 5 per line for readability
+        rows = [seed_terms[i:i+5] for i in range(0, len(seed_terms), 5)]
+        seed_block = "\n".join(", ".join(row) for row in rows)
+
     return f"""# Interaction Preferences — @{f['handle']}
 
 Topics and formats you've engaged with most — updated from session data.
+The For You feed filter extracts single-quoted terms below to personalize what surfaces.
+
+---
+
+## Initial Topics (from onboarding)
+*Pre-seeded from your domain keyword bank. Grows with each profile sync.*
+
+{seed_block}
 
 ---
 
 ## Learned Patterns
+*Auto-updated from session data — topics and tweet formats you engage with most.*
 """
 
 
@@ -595,7 +647,15 @@ Write with sections:
 
 Each section: 2-4 specific paragraphs. Second person. No generic observations."""
 
-    return _claude(prompt, api_key, max_tokens=6000)
+    text, stop_reason = _claude(prompt, api_key, max_tokens=6000, return_stop_reason=True)
+    if stop_reason == "max_tokens":
+        # Claude hit the limit mid-output — a partial soul map is worse than none.
+        # Raise so generate_all() catches it and prints "failed" instead of writing garbage.
+        raise RuntimeError(
+            "soul_map.md generation hit max_tokens — output was truncated. "
+            "The file was NOT written. Re-run with --regen to retry."
+        )
+    return text
 
 
 # ---------------------------------------------------------------------------

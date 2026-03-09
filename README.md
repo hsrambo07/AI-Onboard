@@ -137,6 +137,14 @@ TWEET ARRIVES
       └─ Total context injected: ~5,000–7,000 chars of the most relevant content
 ```
 
+### For You feed — pre-seeded from day 1
+
+`interaction_preferences.md` is pre-seeded during onboarding with single-quoted tool/topic names from your keyword bank (e.g. `'figma'`, `'design systems'`, `'claude code'`). AI-Knowledge's `_build_for_you_filters()` extracts these terms to enrich the For You feed filter immediately — without waiting for profile-sync sessions to accumulate data. The file grows with each sync; the seed is just the starting signal.
+
+### Generation safety guards
+
+The two largest files — `soul_map.md` (6 dimensions × 3-4 paragraphs) and `strategy.md` (5 pillars × keyword banks) — have truncation detection. If Claude hits `max_tokens` mid-output, the write is aborted and an error is printed instead of saving a half-finished file. Re-run `python onboard.py --regen <handle>` to retry. Same pattern AI-Knowledge uses for `consolidate-memory` and `soul-map --rebuild`.
+
 ### Soul map — 6 dimensions
 
 Generated during onboarding from the full interview, not from a separate command:
