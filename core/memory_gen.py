@@ -153,7 +153,7 @@ Write in second person ("You are...", "Your background...").
 Be specific — not generic career fluff. Reference their actual words from the interview.
 Start the file with: # Identity — @{f['handle']}
 """
-    return _claude(prompt, api_key, max_tokens=1200)
+    return _claude(prompt, api_key, max_tokens=2000)
 
 
 # ---------------------------------------------------------------------------
@@ -229,9 +229,9 @@ Write the file with these EXACT sections:
 ## Length Rules
 (specific length guidance based on their actual reply lengths)
 
-{"## The Absurdist Literal Pivot Pattern" + chr(10) + "(if they use this pattern — describe their version of it specifically)" if "y" in uses_absurdist.lower() else ""}
+{'## The "Absurdist Literal Pivot" Pattern' + chr(10) + "(if they use this pattern — describe their version of it specifically, with an example from their actual replies)" if "y" in uses_absurdist.lower() else ""}
 
-{"## The Authoritative but Humorously Factual Pattern" + chr(10) + "(if they use this — describe their version)" if "y" in uses_confident.lower() else ""}
+{'## The "Authoritative but Humorously Factual" Pattern' + chr(10) + "(if they use this — describe their specific version, with an example from their actual replies)" if "y" in uses_confident.lower() else ""}
 
 ## Ground Opinions in Something Real
 (specific guidance on anchoring their opinions — what kind of anchors work for their domain)
@@ -241,7 +241,7 @@ Write the file with these EXACT sections:
 Write in second person. Be specific — reference their ACTUAL replies as examples.
 If their replies show a clear pattern, name it. This file is read by Claude before every reply.
 """
-    return _claude(prompt, api_key, max_tokens=2000)
+    return _claude(prompt, api_key, max_tokens=3000)
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +288,7 @@ Format:
 
 Write in second person. Make it actionable for the AI writing replies.
 """
-    return _claude(prompt, api_key, max_tokens=1200)
+    return _claude(prompt, api_key, max_tokens=2000)
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +340,7 @@ Write the file with sections:
 
 Write in second person. Be specific and honest — not aspirational fluff.
 """
-    return _claude(prompt, api_key, max_tokens=1000)
+    return _claude(prompt, api_key, max_tokens=1500)
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +387,7 @@ Write with sections:
 
 Keep it concrete and actionable. This is read at the start of every session.
 """
-    return _claude(prompt, api_key, max_tokens=800)
+    return _claude(prompt, api_key, max_tokens=1200)
 
 
 # ---------------------------------------------------------------------------
@@ -473,7 +473,7 @@ For EACH content pillar from the data above, write:
 ## Anti-Patterns
 (Specific things to NEVER do based on their cringe definition and stated avoids)
 """
-    return _claude(prompt, api_key, max_tokens=2000)
+    return _claude(prompt, api_key, max_tokens=4000)
 
 
 # ---------------------------------------------------------------------------
@@ -595,7 +595,7 @@ Write with sections:
 
 Each section: 2-4 specific paragraphs. Second person. No generic observations."""
 
-    return _claude(prompt, api_key, max_tokens=2500)
+    return _claude(prompt, api_key, max_tokens=6000)
 
 
 # ---------------------------------------------------------------------------
@@ -707,7 +707,7 @@ Write with these EXACT sections:
 
 Write in second person. Be specific and grounded in their actual answers — not generic career advice.
 """
-    return _claude(prompt, api_key, max_tokens=1000)
+    return _claude(prompt, api_key, max_tokens=1500)
 
 
 # ---------------------------------------------------------------------------
@@ -813,7 +813,7 @@ def generate_all(data: dict, target_dir: Path, api_key: str):
         ("memories/soul_map.md", "Soul map", lambda: gen_soul_map(data, api_key)),
         ("memories/twitter_target_list.md", "Target list", lambda: gen_twitter_target_list(data)),
         ("memories/platforms/twitter/brand_learning.md", None, lambda: gen_brand_learning(data)),
-        ("memories/learning_journal.md", None, lambda: gen_learning_journal(data)),
+        ("memories/archive/learning_journal.md", None, lambda: gen_learning_journal(data)),
         ("memories/index.md", None, lambda: gen_index(data)),
     ]
 
